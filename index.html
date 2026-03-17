@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>1944: The Loop Master (PWA)</title>
+  <meta name="description" content="经典街机空战游戏《1944》的纯前端PWA复刻版，支持离线游玩、添加到主屏幕。">
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#1a237e">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: 'Courier New', monospace;
+      color: #0ff;
+      text-shadow: 0 0 5px #0ff;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    #gameCanvas {
+      display: block;
+      background: #000;
+      margin: 0 auto;
+      border: 1px solid #0ff;
+      box-shadow: 0 0 20px rgba(0,255,255,0.3);
+    }
+    #ui {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 10;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    #controls {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      z-index: 10;
+      font-size: 12px;
+      color: #aaa;
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <div id="ui">
+    SCORE: <span id="score">0</span><br>
+    LIVES: <span id="lives">3</span><br>
+    LOOP: <span id="loopMeter">0%</span>
+  </div>
+  <div id="controls">
+    ← → : 移动 | SPACE : Loop Attack | P : Pause
+  </div>
+
+  <script>
+    // === GAME CORE ===
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const livesEl = document.getElementById('lives');
+    const loopEl = document.getElementById('loopMeter');
+
+    // Game state
+    const state = {
+      score: 0,
+      lives: 3,
+      loopCharge: 0,
+      isPaused: false,
+      keys: {},
+      player: { x: canvas.width / 2, y: canvas.height - 80, radius: 20 },
+      bullets: [],
+      enemies: [],
+      explosions: [],
+      particles: [],
+      allies: [
+        { x: 0, y: 0, radius: 8, angle: 0, speed: 0.03 },
+        { x: 0, y: 0, radius: 8, angle: Math.PI, speed: 0.03 }
+      ],
+      loopActive: false,
+      loopTimer: 0
+    };
+
+    // Draw P-38 Lightning (simplified SVG-like)
+    function drawPlayer(x, y) {
+      ctx.save();
+      ctx.translate(x, y);
+      // Fuselage
+      ctx.fillStyle = '#3399ff';
+      ctx.fillRect(-12, -30, 24, 60);
+      // Wings
+      ctx.fillRect(-40, -8, 80, 16);
+      // Engines
+      ctx.fillStyle = '#ff6600';
+      ctx.fillRect(-25, -25, 10, 50);
+      ctx.fillRect(15, -25, 10, 50);
+      // Cockpit
+      ctx.fillStyle = '#003366';
+      ctx.fillRect(-6, -15, 12, 12);
+      ctx.restore();
+    }
+
+    // Draw enemy (Zero fighter)
+    function drawEnemy(x, y) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.fillStyle = '#cc3333';
+      // Body
+      ctx.fillRect(-10, -20, 20, 40);
+      // Wings
+      ctx.fillRect(-30, -8, 60, 16);
+      // Cockpit
+      ctx.fillStyle = '#000';
+      ctx.fillRect(-4, -12, 8, 8);
+      ctx.restore();
+    }
+
+    // Draw explosion
+    function drawExplosion(x, y, size) {
+      ctx.save();
+      ctx.translate(x, y);
+      const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, size);
+      gradient.addColorStop(0, '#ffcc00');
+      gradient.addColorStop(0.5, '#ff3300');
+      gradient.addColorStop(1, 'transparent');
+      ctx.fillStyle = gradient;
+      ctx.beginPath();
+      ctx.arc(0, 0, size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Draw particles (for bullets & effects)
+    function drawParticles() {
+      state.particles.forEach(p => {
+        ctx.save();
+        ctx.globalAlpha = p.alpha;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      });
+    }
+
+    // Update game logic
+    function update() {
+      // Player movement
+      if (state.keys['ArrowLeft'] && state.player.x > 40) state.player.x -= 5;
+      if (state.keys['ArrowRight'] && state.player.x < canvas.width - 40) state.player.x += 5;
+
+      // Loop charge
+      if (state.keys[' '] && !state.loopActive) {
+        state.loopCharge = Math.min(100, state.loopCharge + 2);
+      }
+
+      // Loop attack
+      if (state.loopCharge >= 100 && state.keys[' ']) {
+        state.loopActive = true;
+        state.loopTimer = 180; // 3 seconds at 60fps
+        state.loopCharge = 0;
+        // Clear all enemies
+        state.enemies = [];
+        // Add particles
+        for (let i = 0; i < 100; i++) {
+          state.particles.push({
+            x: state.player.x,
+            y: state.player.y,
+            size: Math.random() * 3 + 1,
+            color: `hsl(${Math.random() * 60 + 40}, 100%, 60%)`,
+            alpha: 1,
+            life: 30
+          });
+        }
+      }
+
+      // Update loop timer
+      if (state.loopActive) {
+        state.loopTimer--;
+        if (state.loopTimer <= 0) state.loopActive = false;
+      }
+
+      // Spawn enemies
+      if (Math.random() < 0.02) {
+        state.enemies.push({
+          x: Math.random() * (canvas.width - 40) + 20,
+          y: -30,
+          health: 1
+        });
+      }
+
+      // Update bullets
+      for (let i = state.bullets.length - 1; i >= 0; i--) {
+        state.bullets[i].y -= 8;
+        if (state.bullets[i].y < 0) {
+          state.bullets.splice(i, 1);
+        }
+      }
+
+      // Update enemies
+      for (let i = state.enemies.length - 1; i >= 0; i--) {
+        state.enemies[i].y += 2;
+        if (state.enemies[i].y > canvas.height + 30) {
+          state.enemies.splice(i, 1);
+        }
+      }
+
+      // Collision: bullet vs enemy
+      for (let i = state.bullets.length - 1; i >= 0; i--) {
+        for (let j = state.enemies.length - 1; j >= 0; j--) {
+          const dx = state.bullets[i].x - state.enemies[j].x;
+          const dy = state.bullets[i].y - state.enemies[j].y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < 15) {
+            state.score += 100;
+            state.enemies.splice(j, 1);
+            state.bullets.splice(i, 1);
+            // Explosion
+            state.explosions.push({ x: state.bullets[i]?.x || 0, y: state.bullets[i]?.y || 0, size: 20 });
+            break;
+          }
+        }
+      }
+
+      // Update particles
+      for (let i = state.particles.length - 1; i >= 0; i--) {
+        state.particles[i].x += (Math.random() - 0.5) * 4;
+        state.particles[i].y += (Math.random() - 0.5) * 4;
+        state.particles[i].alpha *= 0.97;
+        state.particles[i].life--;
+        if (state.particles[i].life <= 0 || state.particles[i].alpha < 0.1) {
+          state.particles.splice(i, 1);
+        }
+      }
+
+      // Update explosions
+      for (let i = state.explosions.length - 1; i >= 0; i--) {
+        state.explosions[i].size += 0.5;
+        if (state.explosions[i].size > 60) {
+          state.explosions.splice(i, 1);
+        }
+      }
+
+      // Update allies (Loop orbit)
+      state.allies.forEach(a => {
+        a.angle += a.speed;
+        a.x = state.player.x + Math.cos(a.angle) * 60;
+        a.y = state.player.y + Math.sin(a.angle) * 60;
+      });
+    }
+
+    // Render everything
+    function render() {
+      // Clear canvas
+      ctx.fillStyle = '#000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Draw starfield background
+      ctx.fillStyle = '#fff';
+      for (let i = 0; i < 100; i++) {
+        const x = (i * 17) % canvas.width;
+        const y = (i * 13) % canvas.height;
+        ctx.fillRect(x, y, 1, 1);
+      }
+
+      // Draw allies
+      state.allies.forEach(a => {
+        ctx.save();
+        ctx.fillStyle = state.loopActive ? '#00ffff' : '#00ccff';
+        ctx.beginPath();
+        ctx.arc(a.x, a.y, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      });
+
+      // Draw player
+      drawPlayer(state.player.x, state.player.y);
+
+      // Draw bullets
+      ctx.fillStyle = '#00ff99';
+      state.bullets.forEach(b => {
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Draw enemies
+      state.enemies.forEach(e => drawEnemy(e.x, e.y));
+
+      // Draw explosions
+      state.explosions.forEach(e => drawExplosion(e.x, e.y, e.size));
+
+      // Draw particles
+      drawParticles();
+
+      // UI
+      scoreEl.textContent = state.score;
+      livesEl.textContent = state.lives;
+      loopEl.textContent = `${Math.round(state.loopCharge)}%`;
+
+      // Loop indicator
+      if (state.loopActive) {
+        ctx.save();
+        ctx.globalAlpha = 0.3;
+        ctx.strokeStyle = '#00ffff';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(state.player.x, state.player.y, 100, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+
+    // Main game loop
+    function gameLoop() {
+      if (!state.isPaused) {
+        update();
+      }
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    // Input handling
+    window.addEventListener('keydown', e => {
+      state.keys[e.key] = true;
+      if (e.key === 'p' || e.key === 'P') {
+        state.isPaused = !state.isPaused;
+      }
+      if (e.key === ' ' && !state.loopActive) {
+        // Fire bullet
+        state.bullets.push({
+          x: state.player.x,
+          y: state.player.y - 20
+        });
+      }
+    });
+
+    window.addEventListener('keyup', e => {
+      state.keys[e.key] = false;
+    });
+
+    // Start
+    gameLoop();
+  </script>
+</body>
+</html>
