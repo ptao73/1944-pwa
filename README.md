@@ -2,30 +2,45 @@
 
 > 经典街机空战游戏《1944》的纯前端复刻版 —— 无需安装、离线可玩、一键添加到主屏幕。
 
-## ✨ 特性
-- ✅ **真实还原**：P-38 闪电式战斗机、僚机环绕（Loop）、全屏清弹攻击  
-- ✅ **PWA 支持**：离线游玩、添加到主屏幕、推送通知预留  
-- ✅ **零依赖**：单 HTML 文件运行，Canvas 2D 渲染，<200KB  
-- ✅ **响应式**：适配桌面/平板/手机（触控支持计划中）
+**在线游玩：https://ptao73.github.io/1944-pwa/**
 
-## ▶️ 如何游玩
-1. **直接打开**：双击 `index.html` 或用浏览器访问 `file:///path/to/1944-pwa/index.html`  
-2. **键盘操作**：
-   - `← →`：左右移动  
-   - `SPACE`：发射子弹 / 充能 Loop（满格后按 SPACE 触发全屏清弹）  
-   - `P`：暂停/继续  
+## ✨ 特性（v4）
+- ✅ **触控跟随**：手指指到哪，飞机飞到哪；自动开火，离屏即停
+- ✅ **Boss 战**：每 3 关遭遇 Boss，瞄准三连发 + 环形弹幕，半血狂暴
+- ✅ **武器升级**：拾取 `P` 提升火力（4 级），中弹降 1 级
+- ✅ **僚机系统**：拾取 `W` 获得环绕僚机（最多 3 架），`♥` 补充生命
+- ✅ **Loop 大招**：能量自动充满后清屏，对 Boss 造成固定伤害
+- ✅ **合成音效**：WebAudio 实时合成，零音频素材，可静音
+- ✅ **视觉特效**：伪 3D 海洋、视差云层、粒子爆炸、屏幕震动
+- ✅ **PWA 支持**：离线游玩、添加到主屏幕
+- ✅ **零依赖**：单 HTML 文件，Canvas 2D 渲染
 
-## 🚀 部署到 GitHub Pages（1 分钟）
+## ▶️ 操作方式
+**触屏**（手机/平板）：
+- 触摸屏幕任意位置 → 飞机平滑跟随手指
+- 右下角 `LOOP` 按钮 → 充满能量后释放清屏大招
+- 左下角 🔊 按钮 → 静音开关
+
+**键盘**（桌面）：
+| 按键 | 功能 |
+|------|------|
+| `← → ↑ ↓` / `WASD` | 移动 |
+| `L` | 释放 Loop 大招 |
+| `P` | 暂停/继续 |
+| `M` | 静音开关 |
+| `Enter` / `Space` | 开始游戏 |
+
+## 🚀 本地运行
+PWA（Service Worker）需要 HTTP 环境，直接双击 `index.html` 只能玩游戏、无离线功能：
 ```bash
 cd 1944-pwa
-git init
-git add .
-git commit -m "first commit"
-git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/1944-pwa.git
-git push -u origin main
+python3 -m http.server 8000
+# 浏览器访问 http://localhost:8000
 ```
-然后在 GitHub 仓库 Settings → Pages → Source 选 `main / (root)` → 点击 Save。
+
+## 📦 部署到 GitHub Pages
+仓库 Settings → Pages → Source 选 `main / (root)` 即可。
+所有资源均使用相对路径，子路径部署（`username.github.io/1944-pwa/`）开箱即用。
 
 ## 📜 许可证
 MIT License — 可自由修改、商用、再分发。

@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
   <meta name="apple-mobile-web-app-capable" content="yes"/>
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
-  <title>1944: The Loop Master (PWA) v3</title>
-  <meta name="description" content="经典街机空战游戏《1944》PWA v3 — 伪3D海洋·视差云层·粒子特效·触控跟随"/>
-  <link rel="manifest" href="/manifest.json">
+  <title>1944: The Loop Master (PWA) v4</title>
+  <meta name="description" content="经典街机空战游戏《1944》PWA v4 — Boss战·武器升级·合成音效·触控跟随"/>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="apple-touch-icon" href="./icon-192.png">
+  <link rel="icon" type="image/png" href="./icon-192.png">
   <meta name="theme-color" content="#001a33">
   <style>
     *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
@@ -25,12 +27,22 @@
     }
     @supports(padding-bottom:env(safe-area-inset-bottom)){
       #btn-loop{bottom:calc(30px + env(safe-area-inset-bottom));}
+      #btn-mute{bottom:calc(30px + env(safe-area-inset-bottom));}
+    }
+    /* 左下角静音按钮（触屏专用） */
+    #btn-mute{
+      position:fixed;left:20px;bottom:30px;
+      width:44px;height:44px;border-radius:50%;border:none;outline:none;
+      font-size:18px;z-index:30;color:#fff;
+      background:rgba(0,60,120,.55);
+      display:none; /* 仅触屏时显示 */
     }
   </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <button id="btn-loop">LOOP</button>
+<button id="btn-mute">🔊</button>
 <script>
 'use strict';
 // ============================================================
@@ -40,6 +52,58 @@
 const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
 const btnLoopEl = document.getElementById('btn-loop');
+const btnMuteEl = document.getElementById('btn-mute');
+
+// ---- Sound: WebAudio 合成音效（零素材） ---------------------
+let audioCtx=null;
+let muted=localStorage.getItem('1944v3_mute')==='1';
+function ensureAudio(){
+  if(!audioCtx){
+    try{audioCtx=new (window.AudioContext||window.webkitAudioContext)();}catch(e){return;}
+  }
+  if(audioCtx.state==='suspended')audioCtx.resume();
+}
+function tone(freq,dur,type,vol,slideTo,when){
+  if(muted||!audioCtx)return;
+  const t0=audioCtx.currentTime+(when||0);
+  const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+  o.type=type;o.frequency.setValueAtTime(freq,t0);
+  if(slideTo)o.frequency.exponentialRampToValueAtTime(Math.max(slideTo,1),t0+dur);
+  g.gain.setValueAtTime(vol,t0);
+  g.gain.exponentialRampToValueAtTime(.001,t0+dur);
+  o.connect(g);g.connect(audioCtx.destination);
+  o.start(t0);o.stop(t0+dur+.02);
+}
+function noiseBurst(dur,vol,when){
+  if(muted||!audioCtx)return;
+  const t0=audioCtx.currentTime+(when||0);
+  const len=Math.floor(audioCtx.sampleRate*dur);
+  const buf=audioCtx.createBuffer(1,len,audioCtx.sampleRate);
+  const data=buf.getChannelData(0);
+  for(let i=0;i<len;i++)data[i]=(Math.random()*2-1)*(1-i/len);
+  const src=audioCtx.createBufferSource();src.buffer=buf;
+  const g=audioCtx.createGain();g.gain.setValueAtTime(vol,t0);
+  g.gain.exponentialRampToValueAtTime(.001,t0+dur);
+  src.connect(g);g.connect(audioCtx.destination);src.start(t0);
+}
+const SFX={
+  shoot(){tone(900,.05,'square',.035,500);},
+  hit(){tone(260,.06,'sawtooth',.05,120);},
+  explode(){noiseBurst(.25,.18);tone(110,.22,'triangle',.14,50);},
+  explodeBig(){noiseBurst(.55,.26);tone(70,.5,'triangle',.2,30);},
+  powerup(){tone(523,.08,'square',.1);tone(659,.08,'square',.1,0,.08);tone(784,.12,'square',.1,0,.16);},
+  gunUp(){tone(440,.07,'square',.1);tone(660,.07,'square',.1,0,.07);tone(880,.1,'square',.1,0,.14);},
+  playerHit(){tone(300,.4,'sawtooth',.16,60);noiseBurst(.4,.2);},
+  loop(){tone(200,.6,'sine',.18,1200);noiseBurst(.5,.13,.1);},
+  bossWarn(){tone(160,.25,'square',.14);tone(160,.25,'square',.14,0,.35);tone(160,.25,'square',.14,0,.7);},
+  bossDie(){noiseBurst(.8,.28);tone(50,.9,'triangle',.22,25);}
+};
+function toggleMute(){
+  muted=!muted;
+  localStorage.setItem('1944v3_mute',muted?'1':'0');
+  btnMuteEl.textContent=muted?'🔇':'🔊';
+}
+btnMuteEl.textContent=muted?'🔇':'🔊';
 
 // ---- Resize ------------------------------------------------
 let CW,CH,DPR;
@@ -234,6 +298,7 @@ const player={
   hp:3,maxHp:3,
   invincible:0,
   shootTimer:0,shootRate:10,
+  gunLevel:1,maxGunLevel:4,
   loopCharge:0,loopActive:false,loopTimer:0,
   allies:[]
 };
@@ -352,9 +417,11 @@ function updateEnemies(lvl){
 
 // ---- Power-ups ---------------------------------------------
 let powerups=[];
-function spawnPowerup(x,y){
-  if(Math.random()>.35)return;
-  powerups.push({x,y,type:Math.random()<.5?'life':'ally',vy:.8,age:0});
+function spawnPowerup(x,y,force){
+  if(!force&&Math.random()>.35)return;
+  const r=Math.random();
+  const type=r<.4?'gun':(r<.7?'ally':'life');
+  powerups.push({x,y,type,vy:.8,age:0});
 }
 function updatePowerups(){
   for(let i=powerups.length-1;i>=0;i--){
@@ -367,12 +434,113 @@ function drawPowerups(){
     ctx.save();ctx.translate(p.x,p.y);
     const pulse=1+Math.sin(p.age*.15)*.15;ctx.scale(pulse,pulse);ctx.shadowBlur=14;
     if(p.type==='life'){ctx.shadowColor='#ff4488';ctx.fillStyle='#ff4488';}
+    else if(p.type==='gun'){ctx.shadowColor='#ffaa00';ctx.fillStyle='#ffaa00';}
     else{ctx.shadowColor='#00ccff';ctx.fillStyle='#00ccff';}
     ctx.font='bold 22px serif';ctx.textAlign='center';ctx.textBaseline='middle';
-    ctx.fillText(p.type==='life'?'♥':'W',0,0);ctx.restore();
+    ctx.fillText(p.type==='life'?'♥':(p.type==='gun'?'P':'W'),0,0);ctx.restore();
   });
 }
 
+// ---- Boss --------------------------------------------------
+let boss=null,nextBossLevel=3,bossWarnTimer=0;
+function spawnBoss(lvl){
+  const hp=60+lvl*15;
+  boss={
+    x:CW/2,y:-130,targetY:Math.max(CH*.18,120),
+    w:Math.min(150,CW*.42),h:110,
+    hp,maxHp:hp,age:0,
+    shotTimer:70,radialTimer:200,lvl
+  };
+}
+function updateBoss(){
+  if(!boss)return;
+  boss.age++;
+  if(boss.y<boss.targetY){boss.y+=1.5;return;} // 入场阶段不攻击
+  const enraged=boss.hp<boss.maxHp*.5;
+  boss.x=CW/2+Math.sin(boss.age*.012)*(CW/2-boss.w/2-10);
+  // 瞄准三连发
+  boss.shotTimer--;
+  if(boss.shotTimer<=0){
+    boss.shotTimer=enraged?42:70;
+    const spd=enraged?5.5:4.5;
+    addEnemyBullet(boss.x-boss.w*.3,boss.y+boss.h/2,player.x,player.y,spd);
+    addEnemyBullet(boss.x,boss.y+boss.h/2,player.x,player.y,spd);
+    addEnemyBullet(boss.x+boss.w*.3,boss.y+boss.h/2,player.x,player.y,spd);
+  }
+  // 环形弹幕
+  boss.radialTimer--;
+  if(boss.radialTimer<=0){
+    boss.radialTimer=enraged?130:200;
+    const n=enraged?16:12,s=3;
+    for(let i=0;i<n;i++){
+      const a=(i/n)*Math.PI*2+boss.age*.01;
+      enemyBullets.push({x:boss.x,y:boss.y,vx:Math.cos(a)*s,vy:Math.sin(a)*s});
+    }
+  }
+}
+function damageBoss(dmg,hx,hy){
+  if(!boss)return;
+  boss.hp-=dmg;
+  addParticles(hx,hy,5,{minSpd:1,maxSpd:3,colors:['#ff8800','#ffcc00'],minSize:1,sizeVar:2,decayVar:.05,gravity:.05});
+  if(boss.hp<=0)killBoss();
+}
+function killBoss(){
+  const b=boss;boss=null;
+  score+=5000+b.lvl*500;
+  for(let i=0;i<5;i++){
+    spawnExplosion(b.x+(Math.random()-.5)*b.w,b.y+(Math.random()-.5)*b.h,true);
+  }
+  SFX.bossDie();addShake(22);
+  spawnPowerup(b.x-30,b.y,true);spawnPowerup(b.x+30,b.y,true);
+  enemyBullets=[];
+  nextBossLevel=1+Math.floor(score/3000)+3;
+}
+function drawBoss(){
+  if(!boss)return;
+  const s=boss.w/150;
+  ctx.save();ctx.translate(boss.x,boss.y);
+  function fg(x1,y1,w1,h1,c1,c2){
+    const g=ctx.createLinearGradient(x1,y1,x1+w1,y1+h1);
+    g.addColorStop(0,c1);g.addColorStop(1,c2);ctx.fillStyle=g;ctx.fillRect(x1,y1,w1,h1);
+  }
+  const enraged=boss.hp<boss.maxHp*.5;
+  const c1=enraged?'#cc2222':'#883344',c2=enraged?'#661111':'#441122';
+  fg(-26*s,-50*s,52*s,100*s,c1,c2);          // 机身
+  fg(-75*s,-16*s,150*s,30*s,c1,c2);          // 主翼
+  fg(-46*s,30*s,92*s,16*s,c2,c1);            // 尾翼
+  fg(-60*s,-10*s,16*s,40*s,c2,'#220000');    // 左引擎舱
+  fg(44*s,-10*s,16*s,40*s,c2,'#220000');     // 右引擎舱
+  ctx.fillStyle='#220011';
+  ctx.fillRect(-10*s,-34*s,20*s,18*s);       // 驾驶舱
+  ctx.fillStyle='#ffaa00';
+  ctx.fillRect(-56*s,28*s,8*s,8*s);ctx.fillRect(48*s,28*s,8*s,8*s);
+  if(enraged&&Math.floor(boss.age/4)%2===0){
+    ctx.globalAlpha=.25;ctx.fillStyle='#ff0000';
+    ctx.fillRect(-75*s,-50*s,150*s,100*s);ctx.globalAlpha=1;
+  }
+  ctx.restore();
+  // 顶部血条
+  const bw=Math.min(CW*.7,420),bh=10,bx=(CW-bw)/2,by=70;
+  ctx.save();
+  ctx.fillStyle='rgba(40,0,0,.7)';ctx.fillRect(bx,by,bw,bh);
+  ctx.fillStyle=enraged?'#ff2200':'#ff6600';
+  ctx.shadowBlur=8;ctx.shadowColor='#ff4400';
+  ctx.fillRect(bx,by,bw*Math.max(0,boss.hp/boss.maxHp),bh);
+  ctx.shadowBlur=0;ctx.strokeStyle='rgba(255,100,50,.6)';ctx.strokeRect(bx,by,bw,bh);
+  ctx.font='bold 11px "Courier New"';ctx.fillStyle='#ffaa88';ctx.textAlign='center';
+  ctx.fillText('BOSS',CW/2,by-5);
+  ctx.restore();
+}
+function drawBossWarning(){
+  if(bossWarnTimer<=0)return;
+  if(Math.floor(bossWarnTimer/12)%2===0){
+    ctx.save();ctx.textAlign='center';
+    ctx.font='bold 30px "Courier New"';ctx.fillStyle='#ff2200';
+    ctx.shadowBlur=24;ctx.shadowColor='#ff0000';
+    ctx.fillText('⚠ WARNING ⚠',CW/2,CH*.4);
+    ctx.restore();
+  }
+}
 // ---- Collision ---------------------------------------------
 function rectHit(ax,ay,aw,ah,bx,by,bw,bh){
   return Math.abs(ax-bx)<(aw+bw)/2&&Math.abs(ay-by)<(ah+bh)/2;
@@ -387,12 +555,14 @@ let isPaused=false;
 function startGame(){
   score=0;lives=3;level=1;frame=0;
   playerBullets=[];enemyBullets=[];enemies=[];powerups=[];particles=[];
-  player.loopCharge=0;player.loopActive=false;player.allies=[];
+  player.loopCharge=0;player.loopActive=false;player.allies=[];player.gunLevel=1;
+  boss=null;bossWarnTimer=0;nextBossLevel=3;
   resetPlayer();gameState=GS.PLAY;
 }
 function playerHit(){
   if(player.invincible>0)return;
-  lives--;spawnExplosion(player.x,player.y,true);
+  lives--;spawnExplosion(player.x,player.y,true);SFX.playerHit();
+  player.gunLevel=Math.max(1,player.gunLevel-1);
   if(lives<=0){gameState=GS.OVER;if(score>hiScore){hiScore=score;localStorage.setItem('1944v3_hi',hiScore);}}
   else{gameState=GS.DEAD;deadTimer=90;}
 }
@@ -405,14 +575,17 @@ const keys={};
 let touchActive = false;   // 是否有手指在屏幕上
 let touchTargetX = 0;      // 手指当前 X
 let touchTargetY = 0;      // 手指当前 Y
-// 判断点击是否落在 LOOP 按钮上（避免误触）
+// 判断点击是否落在 LOOP/静音按钮上（避免误触）
 function isBtnTouch(x, y){
-  const btn = btnLoopEl.getBoundingClientRect();
-  return x>=btn.left && x<=btn.right && y>=btn.top && y<=btn.bottom;
+  for(const el of [btnLoopEl,btnMuteEl]){
+    const btn = el.getBoundingClientRect();
+    if(x>=btn.left && x<=btn.right && y>=btn.top && y<=btn.bottom) return true;
+  }
+  return false;
 }
 
 canvas.addEventListener('touchstart', e=>{
-  e.preventDefault();
+  e.preventDefault();ensureAudio();
   // 只取第一个非按钮触点
   for(let i=0;i<e.touches.length;i++){
     const t=e.touches[i];
@@ -455,16 +628,21 @@ canvas.addEventListener('touchcancel', e=>{
 },{passive:false});
 
 // LOOP 按钮
-btnLoopEl.addEventListener('touchstart',e=>{e.preventDefault();tryLoop();},{passive:false});
-btnLoopEl.addEventListener('click',()=>tryLoop());
+btnLoopEl.addEventListener('touchstart',e=>{e.preventDefault();ensureAudio();tryLoop();},{passive:false});
+btnLoopEl.addEventListener('click',()=>{ensureAudio();tryLoop();});
+
+// 静音按钮
+btnMuteEl.addEventListener('touchstart',e=>{e.preventDefault();ensureAudio();toggleMute();},{passive:false});
+btnMuteEl.addEventListener('click',()=>{ensureAudio();toggleMute();});
 
 // 键盘（桌面兼容）
 window.addEventListener('keydown',e=>{
-  keys[e.key]=true;
+  keys[e.key]=true;ensureAudio();
   if(e.key===' ')e.preventDefault();
   if(e.key==='p'||e.key==='P') if(gameState===GS.PLAY) isPaused=!isPaused;
   if(e.key==='Enter'||e.key===' ') if(gameState===GS.MENU||gameState===GS.OVER) startGame();
   if(e.key==='l'||e.key==='L') tryLoop();
+  if(e.key==='m'||e.key==='M') toggleMute();
 });
 window.addEventListener('keyup',e=>{keys[e.key]=false;});
 
@@ -473,7 +651,8 @@ function tryLoop(){
   if(player.loopCharge<100||player.loopActive)return;
   player.loopActive=true;player.loopTimer=200;player.loopCharge=0;
   enemies.forEach(e=>{spawnExplosion(e.x,e.y,e.type===2);score+=e.score;});
-  enemies=[];enemyBullets=[];addShake(18);
+  enemies=[];enemyBullets=[];addShake(18);SFX.loop();
+  if(boss)damageBoss(25,boss.x,boss.y); // 对 Boss 造成固定伤害而非秒杀
   addParticles(CW/2,CH/2,150,{minSpd:2,maxSpd:12,
     colors:['#fff','#ffff88','#ffcc00','#ff8800','#00ffff'],
     minSize:2,sizeVar:5,decayVar:.015,gravity:0,vxScale:1.5});
@@ -518,15 +697,29 @@ function update(){
   // Loop timer
   if(player.loopActive){player.loopTimer--;if(player.loopTimer<=0)player.loopActive=false;}
 
-  // 自动开火
+  // 自动开火（火力随 gunLevel 升级，Loop 期间满级）
   player.shootTimer--;
   if(player.shootTimer<=0){
     player.shootTimer=player.loopActive?5:player.shootRate;
-    addPlayerBullet(player.x,player.y-player.h/2);
-    if(player.loopActive||player.allies.length>0){
-      addPlayerBullet(player.x-14,player.y-player.h/2+8,-1,-10);
-      addPlayerBullet(player.x+14,player.y-player.h/2+8, 1,-10);
+    const g=player.loopActive?player.maxGunLevel:player.gunLevel;
+    const ty=player.y-player.h/2;
+    if(g===1){
+      addPlayerBullet(player.x,ty);
+    } else if(g===2){
+      addPlayerBullet(player.x-8,ty);
+      addPlayerBullet(player.x+8,ty);
+    } else if(g===3){
+      addPlayerBullet(player.x,ty);
+      addPlayerBullet(player.x-14,ty+8,-1.5,-10);
+      addPlayerBullet(player.x+14,ty+8, 1.5,-10);
+    } else {
+      addPlayerBullet(player.x-8,ty);
+      addPlayerBullet(player.x+8,ty);
+      addPlayerBullet(player.x-16,ty+8,-2,-10);
+      addPlayerBullet(player.x+16,ty+8, 2,-10);
+      addPlayerBullet(player.x,ty-4,0,-13);
     }
+    SFX.shoot();
   }
 
   // Ally orbit + shoot
@@ -537,24 +730,39 @@ function update(){
     if(a.shootTimer<=0){a.shootTimer=18;addPlayerBullet(ax,ay-10,0,-10);}
   });
 
+  // Boss 出场调度：到达节点先警告，再入场；Boss 战期间暂停杂兵刷新
+  if(!boss&&bossWarnTimer<=0&&level>=nextBossLevel){
+    bossWarnTimer=150;SFX.bossWarn();
+  }
+  if(bossWarnTimer>0){
+    bossWarnTimer--;
+    if(bossWarnTimer<=0)spawnBoss(level);
+  }
+
   // Spawn enemies
   spawnTimer--;
-  if(spawnTimer<=0){spawnTimer=Math.max(18,70-level*5);spawnEnemy(level);}
+  if(spawnTimer<=0&&!boss&&bossWarnTimer<=0){spawnTimer=Math.max(18,70-level*5);spawnEnemy(level);}
 
-  updateEnemies(level);updateBullets();updatePowerups();updateParticles();
+  updateEnemies(level);updateBoss();updateBullets();updatePowerups();updateParticles();
   updateOcean();updateClouds();updateStars();
 
-  // Bullet vs enemy
+  // Bullet vs enemy / boss
   for(let i=playerBullets.length-1;i>=0;i--){
     const b=playerBullets[i];
+    let consumed=false;
     for(let j=enemies.length-1;j>=0;j--){
       const e=enemies[j];
       if(rectHit(b.x,b.y,6,12,e.x,e.y,e.w,e.h)){
-        playerBullets.splice(i,1);e.hp--;
+        playerBullets.splice(i,1);e.hp--;consumed=true;
         addParticles(b.x,b.y,5,{minSpd:1,maxSpd:3,colors:['#ff8800','#ffcc00'],minSize:1,sizeVar:2,decayVar:.05,gravity:.05});
-        if(e.hp<=0){score+=e.score;spawnExplosion(e.x,e.y,e.type===2);spawnPowerup(e.x,e.y);enemies.splice(j,1);}
+        if(e.hp<=0){score+=e.score;spawnExplosion(e.x,e.y,e.type===2);SFX.explode();spawnPowerup(e.x,e.y);enemies.splice(j,1);}
+        else SFX.hit();
         break;
       }
+    }
+    if(!consumed&&boss&&rectHit(b.x,b.y,6,12,boss.x,boss.y,boss.w*.85,boss.h*.85)){
+      playerBullets.splice(i,1);
+      damageBoss(1,b.x,b.y);SFX.hit();
     }
   }
 
@@ -572,16 +780,27 @@ function update(){
     if(!player.loopActive&&player.invincible<=0&&
        rectHit(e.x,e.y,e.w*.7,e.h*.7,player.x,player.y,player.w*.6,player.h*.6)) playerHit();
   });
+  // Boss vs player
+  if(boss&&!player.loopActive&&player.invincible<=0&&
+     rectHit(boss.x,boss.y,boss.w*.8,boss.h*.8,player.x,player.y,player.w*.6,player.h*.6)) playerHit();
 
   // Powerup
   for(let i=powerups.length-1;i>=0;i--){
     const p=powerups[i];
     if(rectHit(p.x,p.y,20,20,player.x,player.y,player.w,player.h)){
       powerups.splice(i,1);
-      if(p.type==='life') lives=Math.min(5,lives+1);
-      else if(player.allies.length<3) player.allies.push({angle:Math.PI*2*player.allies.length/3,r:65,shootTimer:0});
+      if(p.type==='life'){lives=Math.min(5,lives+1);SFX.powerup();}
+      else if(p.type==='gun'){
+        if(player.gunLevel<player.maxGunLevel)player.gunLevel++;
+        else score+=500;
+        SFX.gunUp();
+      }
+      else{
+        if(player.allies.length<3) player.allies.push({angle:Math.PI*2*player.allies.length/3,r:65,shootTimer:0});
+        SFX.powerup();
+      }
       addParticles(p.x,p.y,12,{minSpd:1,maxSpd:4,
-        colors:p.type==='life'?['#ff4488','#ff88bb']:['#00ccff','#88eeff'],
+        colors:p.type==='life'?['#ff4488','#ff88bb']:(p.type==='gun'?['#ffaa00','#ffdd66']:['#00ccff','#88eeff']),
         minSize:2,sizeVar:3,decayVar:.03,gravity:-.02});
     }
   }
@@ -590,6 +809,7 @@ function update(){
   // LOOP 按钮：仅触屏时显示，充满时高亮
   if('ontouchstart' in window){
     btnLoopEl.style.display='block';
+    btnMuteEl.style.display='block';
     btnLoopEl.style.opacity=player.loopCharge>=100?'1':'0.45';
     btnLoopEl.style.boxShadow=player.loopCharge>=100?'0 0 24px #00ffff':'0 0 10px #0055aa';
     btnLoopEl.style.background=player.loopCharge>=100?
@@ -602,6 +822,8 @@ function drawHUD(){
   ctx.save();ctx.font='bold 14px "Courier New"';ctx.shadowBlur=4;
   ctx.fillStyle='#00ffff';ctx.shadowColor='#00ffff';ctx.textAlign='left';
   ctx.fillText('SCORE  '+score,12,20);ctx.fillText('HI     '+hiScore,12,38);ctx.fillText('LV     '+level,12,56);
+  ctx.fillStyle='#ffaa00';ctx.shadowColor='#ffaa00';
+  ctx.fillText('GUN    '+'▮'.repeat(player.gunLevel)+'▯'.repeat(player.maxGunLevel-player.gunLevel),12,74);
   ctx.textAlign='right';ctx.fillStyle='#ff4488';ctx.shadowColor='#ff4488';
   ctx.fillText('LIVES  '+'♥'.repeat(lives),CW-12,20);
   if(player.allies.length>0){ctx.fillStyle='#00ccff';ctx.shadowColor='#00ccff';ctx.fillText('WING  '+'★'.repeat(player.allies.length),CW-12,38);}
@@ -627,9 +849,9 @@ function drawMenu(){
   ctx.font='bold 42px "Courier New"';ctx.fillStyle='#00ffff';ctx.shadowBlur=28;ctx.shadowColor='#00ffff';
   ctx.fillText('1944',CW/2,CH*.24);
   ctx.font='bold 16px "Courier New"';ctx.fillStyle='#88eeff';ctx.shadowBlur=12;ctx.fillText('THE LOOP MASTER',CW/2,CH*.33);
-  ctx.font='12px "Courier New"';ctx.fillStyle='#aaffff';ctx.shadowBlur=0;ctx.fillText('v3 · PWA Edition',CW/2,CH*.4);
+  ctx.font='12px "Courier New"';ctx.fillStyle='#aaffff';ctx.shadowBlur=0;ctx.fillText('v4 · PWA Edition',CW/2,CH*.4);
   ctx.fillStyle='#ccffff';
-  const lines=['触屏：手指指到哪，飞机到哪','离开屏幕飞机停止移动','充满 LOOP 后按 LOOP 按钮清屏','— 拾取 W 获得僚机 —','— 拾取 ♥ 补充生命 —'];
+  const lines=['触屏：手指指到哪，飞机到哪','充满 LOOP 后按 LOOP 按钮清屏','拾取 P 升级火力 · W 僚机 · ♥ 生命','每 3 关遭遇 BOSS 战','键盘：方向键移动 L大招 M静音 P暂停'];
   lines.forEach((l,i)=>{ctx.fillText(l,CW/2,CH*.5+i*24);});
   const blink=Math.floor(Date.now()/550)%2;
   if(blink){ctx.font='bold 15px "Courier New"';ctx.fillStyle='#ffff00';ctx.shadowBlur=10;ctx.shadowColor='#ffff00';
@@ -655,7 +877,9 @@ function render(){
   if(gameState===GS.OVER){drawParticles();drawGameOver();ctx.restore();return;}
   drawParticles();drawBullets();drawPowerups();
   enemies.forEach(e=>drawEnemy(e));
+  drawBoss();
   if(gameState===GS.PLAY||gameState===GS.DEAD) drawPlayer();
+  drawBossWarning();
   drawHUD();
   ctx.restore();
 }
@@ -675,7 +899,7 @@ function loop(){
 }
 
 // ---- Boot --------------------------------------------------
-if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));}
+if('serviceWorker' in navigator){window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));}
 resize();loop();
 </script>
 </body>
