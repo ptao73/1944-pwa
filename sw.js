@@ -1,7 +1,8 @@
-const CACHE_NAME = '1944-pwa-v5';
+const CACHE_NAME = '1944-pwa-v6';
 const urlsToCache = [
   './',
   './index.html',
+  './classic.html',
   './manifest.json',
   './icon-192.png',
   './icon-512.png'
