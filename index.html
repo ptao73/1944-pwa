@@ -291,10 +291,23 @@ function drawBullets(){
   });
   ctx.shadowBlur=0;ctx.restore();
 }
+// ---- 3D 质感共用：旋转螺旋桨（模糊桨盘+闪动桨叶+桨毂） ----
+function drawProp(x,y,r){
+  const c=Math.cos(Date.now()*.05+x*.7+y*.3); // 相位随位置错开，避免所有桨同步
+  ctx.save();
+  ctx.fillStyle='rgba(200,220,235,.16)';
+  ctx.beginPath();ctx.ellipse(x,y,r,r*.26,0,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle='rgba(235,245,255,.7)';ctx.lineWidth=1.5;
+  ctx.beginPath();ctx.moveTo(x-r*c,y-r*.2*c);ctx.lineTo(x+r*c,y+r*.2*c);ctx.stroke();
+  ctx.fillStyle='#1a1a22';
+  ctx.beginPath();ctx.arc(x,y,Math.max(1.5,r*.18),0,Math.PI*2);ctx.fill();
+  ctx.restore();
+}
+
 // ---- Player ------------------------------------------------
 const player={
   x:0,y:0,w:44,h:52,
-  speed:4.5,
+  speed:4.5,bank:0,
   hp:3,maxHp:3,
   invincible:0,
   shootTimer:0,shootRate:10,
@@ -302,47 +315,79 @@ const player={
   loopCharge:0,loopActive:false,loopTimer:0,
   allies:[]
 };
+let prevPlayerX=0;
 function resetPlayer(){
   player.x=CW/2;player.y=CH*.78;
   player.invincible=120;player.shootTimer=0;
+  player.bank=0;prevPlayerX=player.x;
 }
-function drawPlayerPlane(x,y,alpha,scale,tint){
-  const s=scale||1;
+function drawPlayerPlane(x,y,alpha,scale,tint,bank){
+  const s=scale||1,b=Math.max(-1,Math.min(1,bank||0));
   ctx.save();ctx.globalAlpha=alpha||1;ctx.translate(x,y);
-  if(tint)ctx.filter=`hue-rotate(${tint}deg) brightness(1.4)`;
-  // Shadow on ocean
+  // Shadow on ocean（不随滚转旋转，保持贴在海面）
   if(y>CH*.54){
-    ctx.save();ctx.globalAlpha=(alpha||1)*.22;ctx.fillStyle='#000';
-    ctx.beginPath();ctx.ellipse(0,(CH-y)*.18+18,22*s,7*s,0,0,Math.PI*2);ctx.fill();ctx.restore();
+    ctx.save();ctx.globalAlpha=(alpha||1)*.2;ctx.fillStyle='#000';
+    ctx.beginPath();ctx.ellipse(6*s,(CH-y)*.18+18,24*s,7*s,b*.16,0,Math.PI*2);ctx.fill();ctx.restore();
   }
-  // Engine glow
-  const eg=ctx.createRadialGradient(0,18*s,0,0,18*s,20*s);
-  eg.addColorStop(0,'rgba(255,140,0,.9)');eg.addColorStop(.4,'rgba(255,80,0,.4)');eg.addColorStop(1,'rgba(255,60,0,0)');
-  ctx.fillStyle=eg;ctx.beginPath();ctx.arc(0,18*s,20*s,0,Math.PI*2);ctx.fill();
-  function fg(x1,y1,w1,h1,c1,c2){
-    const g=ctx.createLinearGradient(x1,y1,x1+w1,y1+h1);
-    g.addColorStop(0,c1);g.addColorStop(1,c2);ctx.fillStyle=g;ctx.fillRect(x1,y1,w1,h1);
+  if(tint)ctx.filter=`hue-rotate(${tint}deg) brightness(1.35)`;
+  // 滚转：转向时机体小幅旋转+横向压缩，模拟侧倾
+  ctx.rotate(b*.16);ctx.scale(1-Math.abs(b)*.15,1);
+  // 双引擎尾焰（尾撑末端）
+  for(const d of[-1,1]){
+    const eg=ctx.createRadialGradient(15.5*s*d,20*s,0,15.5*s*d,20*s,12*s);
+    eg.addColorStop(0,'rgba(255,150,40,.85)');eg.addColorStop(.5,'rgba(255,80,0,.3)');eg.addColorStop(1,'rgba(255,60,0,0)');
+    ctx.fillStyle=eg;ctx.beginPath();ctx.arc(15.5*s*d,20*s,12*s,0,Math.PI*2);ctx.fill();
   }
-  fg(-20*s,-22*s,9*s,44*s,'#3388dd','#1155aa');
-  fg(11*s,-22*s,9*s,44*s,'#3388dd','#1155aa');
-  fg(-7*s,-26*s,14*s,48*s,'#55aaff','#2266cc');
-  fg(-30*s,-6*s,60*s,11*s,'#4499ee','#2277bb');
-  fg(-18*s,14*s,36*s,7*s,'#3388cc','#1155aa');
-  ctx.fillStyle='rgba(180,230,255,.85)';
-  ctx.beginPath();ctx.ellipse(0,-10*s,5*s,8*s,0,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='rgba(255,255,255,.35)';
-  ctx.beginPath();ctx.ellipse(-1.5*s,-12*s,2*s,4*s,-.3,0,Math.PI*2);ctx.fill();
-  ctx.fillStyle='#ff6600';
-  ctx.fillRect(-17*s,16*s,7*s,6*s);ctx.fillRect(10*s,16*s,7*s,6*s);
+  // 主翼两半：抬升侧变亮、下压侧变暗 → 滚转立体感
+  for(const d of[-1,1]){
+    const lift=1+(d===-1?b:-b)*.35;
+    const wg=ctx.createLinearGradient(0,-8*s,0,9*s);
+    wg.addColorStop(0,`hsl(210,75%,${Math.min(74,58*lift)}%)`);
+    wg.addColorStop(.55,`hsl(211,70%,${Math.min(62,42*lift)}%)`);
+    wg.addColorStop(1,`hsl(213,65%,${Math.min(46,26*lift)}%)`);
+    ctx.fillStyle=wg;ctx.beginPath();
+    ctx.moveTo(2*s*d,-8*s);ctx.lineTo(30*s*d,-3*s);ctx.lineTo(30*s*d,4*s);ctx.lineTo(2*s*d,9*s);
+    ctx.closePath();ctx.fill();
+    // 前缘高光
+    ctx.strokeStyle=`rgba(255,255,255,${.28*lift})`;ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(3*s*d,-7.5*s);ctx.lineTo(29*s*d,-2.6*s);ctx.stroke();
+  }
+  // 水平尾翼
+  const tg=ctx.createLinearGradient(0,13*s,0,19*s);
+  tg.addColorStop(0,'hsl(210,70%,52%)');tg.addColorStop(1,'hsl(213,65%,28%)');
+  ctx.fillStyle=tg;ctx.fillRect(-20*s,13*s,40*s,5.5*s);
+  // 双尾撑：横向三段渐变 = 圆柱受光
+  for(const d of[-1,1]){
+    const bx=15.5*s*d;
+    const bg=ctx.createLinearGradient(bx-5*s,0,bx+5*s,0);
+    bg.addColorStop(0,'#1c466f');bg.addColorStop(.32,'#85c2ff');bg.addColorStop(.7,'#3a7cc0');bg.addColorStop(1,'#11355c');
+    ctx.fillStyle=bg;ctx.beginPath();
+    ctx.moveTo(bx-4.5*s,-18*s);ctx.quadraticCurveTo(bx-4.5*s,-26*s,bx,-27*s);
+    ctx.quadraticCurveTo(bx+4.5*s,-26*s,bx+4.5*s,-18*s);
+    ctx.lineTo(bx+4.5*s,15*s);ctx.quadraticCurveTo(bx+3*s,21*s,bx,21*s);
+    ctx.quadraticCurveTo(bx-3*s,21*s,bx-4.5*s,15*s);ctx.closePath();ctx.fill();
+  }
+  // 中央短舱（机身圆柱）
+  const fgr=ctx.createLinearGradient(-7*s,0,7*s,0);
+  fgr.addColorStop(0,'#1d4a78');fgr.addColorStop(.34,'#9ed1ff');fgr.addColorStop(.72,'#3f86cc');fgr.addColorStop(1,'#123a63');
+  ctx.fillStyle=fgr;ctx.beginPath();ctx.ellipse(0,1*s,7*s,17*s,0,0,Math.PI*2);ctx.fill();
+  // 玻璃座舱盖 + 高光
+  const cg=ctx.createLinearGradient(-4*s,-12*s,4*s,2*s);
+  cg.addColorStop(0,'rgba(225,245,255,.95)');cg.addColorStop(.5,'rgba(120,190,240,.9)');cg.addColorStop(1,'rgba(30,90,160,.9)');
+  ctx.fillStyle=cg;ctx.beginPath();ctx.ellipse(0,-4*s,4.2*s,8*s,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.7)';
+  ctx.beginPath();ctx.ellipse(-1.4*s,-7*s,1.4*s,3*s,-.3,0,Math.PI*2);ctx.fill();
+  // 双螺旋桨（尾撑前端）
+  drawProp(-15.5*s,-28*s,9*s);drawProp(15.5*s,-28*s,9*s);
   ctx.restore();
 }
 function drawPlayer(){
   if(player.invincible>0&&Math.floor(player.invincible/5)%2===1)return;
   player.allies.forEach(a=>{
     const ax=player.x+Math.cos(a.angle)*a.r,ay=player.y+Math.sin(a.angle)*a.r;
-    drawPlayerPlane(ax,ay,.85,.72,180);
+    drawPlayerPlane(ax,ay,.85,.72,180,-Math.sin(a.angle)*.8); // 滚转跟随环绕方向
   });
-  drawPlayerPlane(player.x,player.y,1,1,0);
+  drawPlayerPlane(player.x,player.y,1,1,0,player.bank);
   if(player.loopActive){
     const t=player.loopTimer/200;
     ctx.save();ctx.strokeStyle='#00ffff';ctx.lineWidth=3;
@@ -370,30 +415,106 @@ function spawnEnemy(lvl){
     sinAmp:typeIdx===0?Math.random()*2:.5,sinFreq:Math.random()*.04+.02,age:0
   });
 }
+// 敌机调色板（保持原红/橙/棕色系，用 HSL 做立体明暗）
+const EPAL=[{h:358,sat:68},{h:26,sat:72},{h:18,sat:42}];
 function drawEnemy(e){
-  const T=ETYPES[e.type],s=e.w/44;
+  const s=e.w/44,P=EPAL[e.type];
+  const hsl=(l,a)=>`hsla(${P.h},${P.sat}%,${l}%,${a==null?1:a})`;
+  // 横向速度 → 滚转量（与移动逻辑同源）
+  const bv=Math.max(-1,Math.min(1,(e.vx+Math.sin(e.age*e.sinFreq)*e.sinAmp)/2.2));
   ctx.save();ctx.translate(e.x,e.y);
   if(e.y>CH*.54){
     ctx.save();ctx.globalAlpha=.18;ctx.fillStyle='#000';
-    ctx.beginPath();ctx.ellipse(0,20*s,e.w*.38,e.w*.1,0,0,Math.PI*2);ctx.fill();ctx.restore();
+    ctx.beginPath();ctx.ellipse(5*s,20*s,e.w*.4,e.w*.1,-bv*.2,0,Math.PI*2);ctx.fill();ctx.restore();
   }
-  function fg(x1,y1,w1,h1,c1,c2){
-    const g=ctx.createLinearGradient(x1,y1,x1+w1,y1+h1);
-    g.addColorStop(0,c1);g.addColorStop(1,c2);ctx.fillStyle=g;ctx.fillRect(x1,y1,w1,h1);
+  ctx.save();
+  ctx.rotate(-bv*.22);ctx.scale(1-Math.abs(bv)*.12,1); // 侧倾（机头朝下，转向方向相反）
+  // 尾焰（敌机朝下飞，尾喷口在上方）
+  const eg=ctx.createRadialGradient(0,-e.h*.42,0,0,-e.h*.42,9*s);
+  eg.addColorStop(0,'rgba(255,140,40,.5)');eg.addColorStop(1,'rgba(255,80,0,0)');
+  ctx.fillStyle=eg;ctx.beginPath();ctx.arc(0,-e.h*.42,9*s,0,Math.PI*2);ctx.fill();
+  // 主翼两半（滚转明暗）
+  function wing(x0,x1,y0,y1,y2,y3){
+    for(const d of[-1,1]){
+      const lift=1+(d===1?bv:-bv)*.3;
+      const wg=ctx.createLinearGradient(0,y0*s,0,y3*s);
+      wg.addColorStop(0,hsl(Math.min(62,48*lift)));
+      wg.addColorStop(.5,hsl(Math.min(50,36*lift)));
+      wg.addColorStop(1,hsl(Math.min(36,22*lift)));
+      ctx.fillStyle=wg;ctx.beginPath();
+      ctx.moveTo(x0*s*d,y0*s);ctx.lineTo(x1*s*d,y1*s);ctx.lineTo(x1*s*d,y2*s);ctx.lineTo(x0*s*d,y3*s);
+      ctx.closePath();ctx.fill();
+      ctx.strokeStyle=`rgba(255,235,210,${.2*lift})`;ctx.lineWidth=1;
+      ctx.beginPath();ctx.moveTo(x0*s*d,(y3-1)*s);ctx.lineTo(x1*s*d,(y2-1)*s);ctx.stroke(); // 前缘在下侧
+    }
   }
-  if(e.type===0){
-    fg(-8*s,-18*s,16*s,36*s,T.color,T.color2);fg(-22*s,-5*s,44*s,10*s,T.color,T.color2);
-    ctx.fillStyle='#000';ctx.fillRect(-4*s,-12*s,8*s,8*s);
-    ctx.fillStyle='#ff6600';ctx.fillRect(-5*s,14*s,10*s,4*s);
-  } else if(e.type===1){
-    fg(-10*s,-20*s,20*s,40*s,T.color,T.color2);fg(-28*s,-7*s,56*s,12*s,T.color,T.color2);
-    fg(-8*s,-24*s,16*s,24*s,T.color,T.color2);ctx.fillStyle='#ff8800';ctx.fillRect(-7*s,16*s,14*s,5*s);
-  } else {
-    fg(-14*s,-22*s,28*s,44*s,T.color,T.color2);fg(-36*s,-9*s,72*s,14*s,T.color,T.color2);
-    fg(-10*s,-26*s,20*s,26*s,T.color,T.color2);
-    ctx.fillStyle=T.color2;ctx.fillRect(-38*s,-5*s,10*s,8*s);ctx.fillRect(28*s,-5*s,10*s,8*s);
-    ctx.fillStyle='#ffaa00';ctx.fillRect(-8*s,18*s,16*s,6*s);
+  // 机身圆柱（横向三段渐变）
+  function fuselage(rx,ry,cy){
+    const g=ctx.createLinearGradient(-rx*s,0,rx*s,0);
+    g.addColorStop(0,hsl(18));g.addColorStop(.34,hsl(58));g.addColorStop(.72,hsl(34));g.addColorStop(1,hsl(13));
+    ctx.fillStyle=g;ctx.beginPath();ctx.ellipse(0,cy*s,rx*s,ry*s,0,0,Math.PI*2);ctx.fill();
   }
+  // 深色玻璃座舱 + 高光
+  function canopy(cy,rx,ry){
+    const g=ctx.createLinearGradient(-rx*s,(cy-ry)*s,rx*s,(cy+ry)*s);
+    g.addColorStop(0,'rgba(190,210,225,.9)');g.addColorStop(.5,'rgba(60,80,100,.95)');g.addColorStop(1,'rgba(15,20,30,.95)');
+    ctx.fillStyle=g;ctx.beginPath();ctx.ellipse(0,cy*s,rx*s,ry*s,0,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.45)';
+    ctx.beginPath();ctx.ellipse(-rx*.3*s,(cy-ry*.4)*s,rx*.3*s,ry*.35*s,-.3,0,Math.PI*2);ctx.fill();
+  }
+  // 翼面机徽
+  function roundel(rx,ry){
+    for(const d of[-1,1]){
+      ctx.fillStyle='rgba(255,210,40,.9)';
+      ctx.beginPath();ctx.arc(rx*s*d,ry*s,3.2*s,0,Math.PI*2);ctx.fill();
+      ctx.fillStyle=hsl(15);
+      ctx.beginPath();ctx.arc(rx*s*d,ry*s,1.5*s,0,Math.PI*2);ctx.fill();
+    }
+  }
+  // 水平尾翼（机尾=上方）
+  function tail(w,y,h){
+    const g=ctx.createLinearGradient(0,y*s,0,(y+h)*s);
+    g.addColorStop(0,hsl(20));g.addColorStop(1,hsl(42));
+    ctx.fillStyle=g;ctx.fillRect(-w*s,y*s,w*2*s,h*s);
+  }
+  if(e.type===0){          // 轻型战斗机：单桨单座
+    tail(7,-17,4.5);
+    wing(2,20,-4,-1,5,8);
+    fuselage(4.5,15,0);
+    canopy(-1,3,5.5);
+    roundel(13,2);
+    drawProp(0,17*s,7*s);
+  } else if(e.type===1){   // 中型攻击机：双发
+    tail(9,-19,5);
+    wing(3,26,-5,-2,5,9);
+    fuselage(5.5,17,0);
+    // 翼上引擎短舱
+    for(const d of[-1,1]){
+      const ng=ctx.createLinearGradient((13*d-3.5)*s,0,(13*d+3.5)*s,0);
+      ng.addColorStop(0,hsl(14));ng.addColorStop(.35,hsl(46));ng.addColorStop(1,hsl(11));
+      ctx.fillStyle=ng;ctx.beginPath();ctx.ellipse(13*s*d,2*s,3.5*s,8*s,0,0,Math.PI*2);ctx.fill();
+    }
+    canopy(-3,3.5,6.5);
+    roundel(21,2);
+    drawProp(-13*s,11*s,5.5*s);drawProp(13*s,11*s,5.5*s);
+  } else {                 // 重型轰炸机：宽体+机鼻玻璃+背部炮塔
+    tail(12,-21,6);
+    wing(4,27,-6,-1,7,11);
+    fuselage(7,19,1);
+    // 机鼻投弹玻璃
+    const ng=ctx.createLinearGradient(-4*s,12*s,4*s,20*s);
+    ng.addColorStop(0,'rgba(180,200,215,.85)');ng.addColorStop(1,'rgba(20,30,45,.95)');
+    ctx.fillStyle=ng;ctx.beginPath();ctx.ellipse(0,15*s,4.5*s,5*s,0,0,Math.PI*2);ctx.fill();
+    canopy(4,4,5);
+    // 背部炮塔
+    ctx.fillStyle='rgba(40,50,65,.95)';
+    ctx.beginPath();ctx.arc(0,-7*s,3*s,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='rgba(200,220,235,.5)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(0,-7*s);ctx.lineTo(2.5*s,-11*s);ctx.moveTo(0,-7*s);ctx.lineTo(-2.5*s,-11*s);ctx.stroke();
+    roundel(22,3);
+    drawProp(-15*s,9*s,6*s);drawProp(15*s,9*s,6*s);
+  }
+  ctx.restore(); // 结束侧倾变换，血条保持水平
   if(e.maxHp>1){
     const bw=e.w*.7,bh=4;
     ctx.fillStyle='#300';ctx.fillRect(-bw/2,e.h/2+4,bw,bh);
@@ -498,25 +619,75 @@ function killBoss(){
 function drawBoss(){
   if(!boss)return;
   const s=boss.w/150;
-  ctx.save();ctx.translate(boss.x,boss.y);
-  function fg(x1,y1,w1,h1,c1,c2){
-    const g=ctx.createLinearGradient(x1,y1,x1+w1,y1+h1);
-    g.addColorStop(0,c1);g.addColorStop(1,c2);ctx.fillStyle=g;ctx.fillRect(x1,y1,w1,h1);
-  }
   const enraged=boss.hp<boss.maxHp*.5;
-  const c1=enraged?'#cc2222':'#883344',c2=enraged?'#661111':'#441122';
-  fg(-26*s,-50*s,52*s,100*s,c1,c2);          // 机身
-  fg(-75*s,-16*s,150*s,30*s,c1,c2);          // 主翼
-  fg(-46*s,30*s,92*s,16*s,c2,c1);            // 尾翼
-  fg(-60*s,-10*s,16*s,40*s,c2,'#220000');    // 左引擎舱
-  fg(44*s,-10*s,16*s,40*s,c2,'#220000');     // 右引擎舱
-  ctx.fillStyle='#220011';
-  ctx.fillRect(-10*s,-34*s,20*s,18*s);       // 驾驶舱
-  ctx.fillStyle='#ffaa00';
-  ctx.fillRect(-56*s,28*s,8*s,8*s);ctx.fillRect(48*s,28*s,8*s,8*s);
+  const hue=enraged?358:340,sat=enraged?70:45;
+  const hsl=(l,a)=>`hsla(${hue},${sat}%,${l}%,${a==null?1:a})`;
+  // 横移速度 → 轻微侧倾
+  const bb=Math.cos(boss.age*.012)*.5;
+  ctx.save();ctx.translate(boss.x,boss.y);
+  ctx.rotate(-bb*.08);ctx.scale(1-Math.abs(bb)*.05,1);
+  // 四引擎尾焰（机尾=上方）
+  for(const ex of[-52,-22,22,52]){
+    const eg=ctx.createRadialGradient(ex*s,-26*s,0,ex*s,-26*s,11*s);
+    eg.addColorStop(0,'rgba(255,140,40,.55)');eg.addColorStop(1,'rgba(255,80,0,0)');
+    ctx.fillStyle=eg;ctx.beginPath();ctx.arc(ex*s,-26*s,11*s,0,Math.PI*2);ctx.fill();
+  }
+  // 主翼两半（滚转明暗）
+  for(const d of[-1,1]){
+    const lift=1+(d===1?bb:-bb)*.25;
+    const wg=ctx.createLinearGradient(0,-18*s,0,16*s);
+    wg.addColorStop(0,hsl(Math.min(52,40*lift)));
+    wg.addColorStop(.5,hsl(Math.min(42,30*lift)));
+    wg.addColorStop(1,hsl(Math.min(30,18*lift)));
+    ctx.fillStyle=wg;ctx.beginPath();
+    ctx.moveTo(8*s*d,-18*s);ctx.lineTo(75*s*d,-8*s);ctx.lineTo(75*s*d,8*s);ctx.lineTo(8*s*d,16*s);
+    ctx.closePath();ctx.fill();
+    ctx.strokeStyle=`rgba(255,220,200,${.18*lift})`;ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(9*s*d,14*s);ctx.lineTo(74*s*d,6*s);ctx.stroke();
+  }
+  // 水平尾翼
+  const tg=ctx.createLinearGradient(0,-50*s,0,-36*s);
+  tg.addColorStop(0,hsl(18));tg.addColorStop(1,hsl(38));
+  ctx.fillStyle=tg;ctx.fillRect(-46*s,-50*s,92*s,14*s);
+  // 翼上引擎短舱 ×4
+  for(const ex of[-52,-22,22,52]){
+    const ng=ctx.createLinearGradient((ex-6)*s,0,(ex+6)*s,0);
+    ng.addColorStop(0,hsl(12));ng.addColorStop(.35,hsl(42));ng.addColorStop(1,hsl(9));
+    ctx.fillStyle=ng;ctx.beginPath();ctx.ellipse(ex*s,-2*s,6*s,15*s,0,0,Math.PI*2);ctx.fill();
+  }
+  // 机身圆柱
+  const fgr=ctx.createLinearGradient(-26*s,0,26*s,0);
+  fgr.addColorStop(0,hsl(15));fgr.addColorStop(.34,hsl(50));fgr.addColorStop(.72,hsl(30));fgr.addColorStop(1,hsl(11));
+  ctx.fillStyle=fgr;ctx.beginPath();ctx.ellipse(0,0,26*s,52*s,0,0,Math.PI*2);ctx.fill();
+  // 机鼻玻璃（朝下）
+  const ngl=ctx.createLinearGradient(-10*s,36*s,10*s,52*s);
+  ngl.addColorStop(0,'rgba(190,210,225,.85)');ngl.addColorStop(1,'rgba(20,30,45,.95)');
+  ctx.fillStyle=ngl;ctx.beginPath();ctx.ellipse(0,42*s,10*s,9*s,0,0,Math.PI*2);ctx.fill();
+  // 驾驶舱玻璃
+  const cg=ctx.createLinearGradient(-8*s,16*s,8*s,32*s);
+  cg.addColorStop(0,'rgba(200,220,235,.9)');cg.addColorStop(.5,'rgba(70,90,110,.95)');cg.addColorStop(1,'rgba(15,20,30,.95)');
+  ctx.fillStyle=cg;ctx.beginPath();ctx.ellipse(0,24*s,8*s,7*s,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='rgba(255,255,255,.4)';
+  ctx.beginPath();ctx.ellipse(-2.5*s,21*s,2.5*s,2*s,-.3,0,Math.PI*2);ctx.fill();
+  // 背部双炮塔
+  for(const ty of[-12,6]){
+    ctx.fillStyle='rgba(40,45,60,.95)';
+    ctx.beginPath();ctx.arc(0,ty*s,4.5*s,0,Math.PI*2);ctx.fill();
+    ctx.strokeStyle='rgba(200,220,235,.5)';ctx.lineWidth=1.5;
+    ctx.beginPath();ctx.moveTo(0,ty*s);ctx.lineTo(4*s,(ty+6)*s);ctx.moveTo(0,ty*s);ctx.lineTo(-4*s,(ty+6)*s);ctx.stroke();
+  }
+  // 机徽
+  for(const d of[-1,1]){
+    ctx.fillStyle='rgba(255,210,40,.9)';
+    ctx.beginPath();ctx.arc(48*s*d,0,6*s,0,Math.PI*2);ctx.fill();
+    ctx.fillStyle=hsl(12);
+    ctx.beginPath();ctx.arc(48*s*d,0,3*s,0,Math.PI*2);ctx.fill();
+  }
+  // 四螺旋桨（机头侧=下方）
+  for(const ex of[-52,-22,22,52]) drawProp(ex*s,14*s,10*s);
   if(enraged&&Math.floor(boss.age/4)%2===0){
-    ctx.globalAlpha=.25;ctx.fillStyle='#ff0000';
-    ctx.fillRect(-75*s,-50*s,150*s,100*s);ctx.globalAlpha=1;
+    ctx.globalAlpha=.22;ctx.fillStyle='#ff0000';
+    ctx.beginPath();ctx.ellipse(0,0,78*s,56*s,0,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;
   }
   ctx.restore();
   // 顶部血条
@@ -688,6 +859,10 @@ function update(){
   const hw=player.w/2,hh=player.h/2;
   player.x=Math.max(hw,Math.min(CW-hw,player.x));
   player.y=Math.max(hh,Math.min(CH-hh-50,player.y));
+
+  // 滚转平滑：横向速度 → 侧倾角（视觉用）
+  player.bank+=(Math.max(-1,Math.min(1,(player.x-prevPlayerX)/7))-player.bank)*.15;
+  prevPlayerX=player.x;
 
   if(player.invincible>0)player.invincible--;
 
